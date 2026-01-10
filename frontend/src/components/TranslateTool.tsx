@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 
-const API_BASE = "https://xxxxx.execute-api.ap-northeast-1.amazonaws.com"; // ← ここだけ変更
+const API_BASE = "https://owoutxnj2m.execute-api.ap-northeast-1.amazonaws.com"; // ← ここだけ変更
 
 export default function TranslateTool() {
   const [file, setFile] = useState<File | null>(null);
