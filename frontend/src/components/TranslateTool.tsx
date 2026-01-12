@@ -1,121 +1,130 @@
-import React, { useState } from "react";
+import { useState } from "react";
 
-const API_BASE = "https://owoutxnj2m.execute-api.ap-northeast-1.amazonaws.com"; // ← ここだけ変更
+const UPLOAD_API = import.meta.env.VITE_UPLOAD_API;
+const TRANSLATE_API = import.meta.env.VITE_TRANSLATE_API;
 
-export default function TranslateTool() {
+export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [processing, setProcessing] = useState(false);
-  const [translatedUrl, setTranslatedUrl] = useState<string | null>(null);
-  const [uploadedKey, setUploadedKey] = useState<string>("");
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  // ========== Step 1: ファイル選択 ==========
-  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      setFile(e.target.files[0]);
-      setTranslatedUrl(null); // 前回分リセット
-    }
-  };
-
-  // ========== Step 2: S3 にアップロード ==========
-  const uploadFile = async () => {
+  const uploadAndTranslate = async () => {
     if (!file) return;
+
     setUploading(true);
+    setError(null);
+    setResult(null);
 
     try {
-      // Presigned URL を Lambda 経由で取得
-      const res = await fetch(`${API_BASE}/translate?mode=upload`, {
+      /* ==============================
+         1. Presigned URL を取得
+      ============================== */
+      console.log("Calling presigned API:", UPLOAD_API);
+
+      const presignRes = await fetch(`${UPLOAD_API}?mode=upload`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           fileName: file.name,
           contentType: file.type || "application/octet-stream",
         }),
       });
 
-      const { uploadUrl, objectKey } = await res.json();
+      const presignText = await presignRes.text();
+      if (!presignRes.ok) {
+        throw new Error(`Presigned API Error: ${presignRes.status} ${presignText}`);
+      }
 
-      // S3 に PUT
-      const s3Res = await fetch(uploadUrl, {
+      const presignData = JSON.parse(presignText);
+      const { uploadUrl, key } = presignData;
+
+      if (!uploadUrl || !key) {
+        throw new Error("Presigned API のレスポンスに uploadUrl または key がありません");
+      }
+
+      console.log("uploadUrl:", uploadUrl);
+      console.log("s3 key:", key);
+
+      /* ==============================
+         2. S3 に直接アップロード
+      ============================== */
+      const uploadRes = await fetch(uploadUrl, {
         method: "PUT",
-        headers: { "Content-Type": file.type },
         body: file,
+        headers: {
+          // Presigned URL の署名と一致させる
+          "Content-Type": file.type || "application/octet-stream",
+        },
       });
 
-      if (!s3Res.ok) throw new Error("S3 アップロード失敗");
+      if (!uploadRes.ok) {
+        const t = await uploadRes.text();
+        throw new Error(`S3 Upload Error: ${uploadRes.status} ${t}`);
+      }
 
-      setUploadedKey(objectKey);
-      alert("アップロード完了");
+      console.log("S3 upload success");
 
-    } catch (err) {
-      console.error(err);
-      alert("アップロードに失敗しました");
+      /* ==============================
+         3. 翻訳 Lambda を呼ぶ
+      ============================== */
+      console.log("Calling translate API:", TRANSLATE_API);
+
+      const translateRes = await fetch(`${TRANSLATE_API}?mode=translate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          s3Key: key,
+        }),
+      });
+
+      const translateText = await translateRes.text();
+      if (!translateRes.ok) {
+        throw new Error(`Translate API Error: ${translateRes.status} ${translateText}`);
+      }
+
+      const data = JSON.parse(translateText);
+
+      setResult(data.translatedText || "翻訳が完了しました");
+
+    } catch (err: any) {
+      console.error("Upload & Translate failed:", err);
+      setError(err.message || "不明なエラー");
     } finally {
       setUploading(false);
     }
   };
 
-  // ========== Step 3: 翻訳処理実行 ==========
-  const processTranslation = async () => {
-    if (!uploadedKey) return;
-
-    setProcessing(true);
-
-    try {
-      const res = await fetch(`${API_BASE}/translate?mode=process`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ objectKey: uploadedKey }),
-      });
-
-      const { downloadUrl } = await res.json();
-
-      setTranslatedUrl(downloadUrl);
-
-      alert("翻訳完了しました！");
-
-    } catch (err) {
-      console.error(err);
-      alert("翻訳処理に失敗しました");
-    } finally {
-      setProcessing(false);
-    }
-  };
-
   return (
-    <div style={{ padding: "20px", maxWidth: "600px" }}>
-      <h2>翻訳ツール（PDF / 画像対応）</h2>
+    <div style={{ padding: "2rem", maxWidth: "600px", margin: "auto" }}>
+      <h1>PDF / 画像 翻訳ツール</h1>
 
-      {/* Step 1: ファイル選択 */}
-      <div>
-        <input type="file" onChange={onFileChange} />
-      </div>
+      <input
+        type="file"
+        accept=".pdf,image/*"
+        onChange={(e) => setFile(e.target.files?.[0] || null)}
+      />
 
-      {/* Step 2: S3 アップロード */}
-      <button
-        disabled={!file || uploading}
-        onClick={uploadFile}
-        style={{ marginTop: "10px" }}
-      >
-        {uploading ? "アップロード中..." : "ファイルをアップロード"}
+      <br /><br />
+
+      <button onClick={uploadAndTranslate} disabled={!file || uploading}>
+        {uploading ? "処理中..." : "アップロード & 翻訳"}
       </button>
 
-      {/* Step 3: 翻訳処理実行 */}
-      <button
-        disabled={!uploadedKey || processing}
-        onClick={processTranslation}
-        style={{ marginTop: "10px", marginLeft: "10px" }}
-      >
-        {processing ? "翻訳中..." : "翻訳を実行"}
-      </button>
+      {error && (
+        <p style={{ color: "red", marginTop: "1rem" }}>
+          ❌ {error}
+        </p>
+      )}
 
-      {/* Step 4: ダウンロードリンク表示 */}
-      {translatedUrl && (
-        <div style={{ marginTop: "20px" }}>
-          <p>翻訳済みドキュメント：</p>
-          <a href={translatedUrl} download>
-            ここをクリックしてダウンロード
-          </a>
+      {result && (
+        <div style={{ marginTop: "1rem", whiteSpace: "pre-wrap" }}>
+          <h3>翻訳結果</h3>
+          <pre>{result}</pre>
         </div>
       )}
     </div>
