@@ -17,11 +17,11 @@ export default function App() {
     setResult(null);
 
     try {
-      console.log("Calling presigned API:", UPLOAD_API);
-
       /* ==============================
          1. Presigned URL を取得
       ============================== */
+      console.log("Calling presigned API:", UPLOAD_API);
+
       const presignRes = await fetch(`${UPLOAD_API}?mode=upload`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -31,16 +31,19 @@ export default function App() {
         }),
       });
 
-      if (!presignRes.ok) {
-        const t = await presignRes.text();
-        throw new Error(`Presigned API Error: ${presignRes.status} ${t}`);
-      }
+      const raw = await presignRes.json();
 
-      const raw = await presignRes.json();              // ← API Gateway の生レスポンス
-      const { uploadUrl, objectKey } = JSON.parse(raw.body);   // ← ★ここが本体
+      // HTTP API / REST API 両対応
+      const data = typeof raw.body === "string" ? JSON.parse(raw.body) : raw;
+
+      const { uploadUrl, objectKey } = data;
 
       console.log("uploadUrl:", uploadUrl);
       console.log("objectKey:", objectKey);
+
+      if (!uploadUrl || !objectKey) {
+        throw new Error("Presigned API returned invalid response");
+      }
 
       /* ==============================
          2. S3 に直接アップロード
@@ -60,7 +63,7 @@ export default function App() {
       console.log("S3 upload success");
 
       /* ==============================
-         3. 翻訳 API を呼ぶ
+         3. 翻訳 Lambda を呼ぶ
       ============================== */
       console.log("Calling translate API:", TRANSLATE_API);
 
@@ -68,17 +71,23 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          objectKey,   // ← ★ここが最重要
+          objectKey: objectKey, // ← これが重要
         }),
       });
 
+      const translateRaw = await translateRes.json();
+      const translateData =
+        typeof translateRaw.body === "string"
+          ? JSON.parse(translateRaw.body)
+          : translateRaw;
+
       if (!translateRes.ok) {
-        const t = await translateRes.text();
-        throw new Error(`Translate API Error: ${translateRes.status} ${t}`);
+        throw new Error(
+          `Translate API Error: ${translateRes.status} ${JSON.stringify(translateData)}`
+        );
       }
 
-      const data = await translateRes.json();
-      setResult(data.translatedText || "翻訳完了");
+      setResult(translateData.translatedText || "翻訳完了");
     } catch (err: any) {
       console.error("Upload & Translate failed:", err);
       setError(err.message || "不明なエラー");
