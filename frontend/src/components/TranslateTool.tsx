@@ -36,7 +36,8 @@ export default function App() {
         throw new Error(`Presigned API Error: ${presignRes.status} ${t}`);
       }
 
-      const { uploadUrl, objectKey } = await presignRes.json();
+      const raw = await presignRes.json();              // ← API Gateway の生レスポンス
+      const { uploadUrl, objectKey } = JSON.parse(raw.body);   // ← ★ここが本体
 
       console.log("uploadUrl:", uploadUrl);
       console.log("objectKey:", objectKey);
