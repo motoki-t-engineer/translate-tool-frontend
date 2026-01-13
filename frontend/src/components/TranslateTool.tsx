@@ -17,80 +17,67 @@ export default function App() {
     setResult(null);
 
     try {
+      console.log("Calling presigned API:", UPLOAD_API);
+
       /* ==============================
          1. Presigned URL を取得
       ============================== */
-      console.log("Calling presigned API:", UPLOAD_API);
-
       const presignRes = await fetch(`${UPLOAD_API}?mode=upload`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           fileName: file.name,
           contentType: file.type || "application/octet-stream",
         }),
       });
 
-      const presignText = await presignRes.text();
       if (!presignRes.ok) {
-        throw new Error(`Presigned API Error: ${presignRes.status} ${presignText}`);
+        const t = await presignRes.text();
+        throw new Error(`Presigned API Error: ${presignRes.status} ${t}`);
       }
 
-      const presignData = JSON.parse(presignText);
-      const { uploadUrl, key } = presignData;
-
-      if (!uploadUrl || !key) {
-        throw new Error("Presigned API のレスポンスに uploadUrl または key がありません");
-      }
+      const { uploadUrl, objectKey } = await presignRes.json();
 
       console.log("uploadUrl:", uploadUrl);
-      console.log("s3 key:", key);
+      console.log("objectKey:", objectKey);
 
       /* ==============================
          2. S3 に直接アップロード
       ============================== */
       const uploadRes = await fetch(uploadUrl, {
         method: "PUT",
-        body: file,
         headers: {
-          // Presigned URL の署名と一致させる
           "Content-Type": file.type || "application/octet-stream",
         },
+        body: file,
       });
 
       if (!uploadRes.ok) {
-        const t = await uploadRes.text();
-        throw new Error(`S3 Upload Error: ${uploadRes.status} ${t}`);
+        throw new Error("S3 upload failed");
       }
 
       console.log("S3 upload success");
 
       /* ==============================
-         3. 翻訳 Lambda を呼ぶ
+         3. 翻訳 API を呼ぶ
       ============================== */
       console.log("Calling translate API:", TRANSLATE_API);
 
       const translateRes = await fetch(`${TRANSLATE_API}?mode=translate`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          s3Key: key,
+          objectKey,   // ← ★ここが最重要
         }),
       });
 
-      const translateText = await translateRes.text();
       if (!translateRes.ok) {
-        throw new Error(`Translate API Error: ${translateRes.status} ${translateText}`);
+        const t = await translateRes.text();
+        throw new Error(`Translate API Error: ${translateRes.status} ${t}`);
       }
 
-      const data = JSON.parse(translateText);
-
-      setResult(data.translatedText || "翻訳が完了しました");
-
+      const data = await translateRes.json();
+      setResult(data.translatedText || "翻訳完了");
     } catch (err: any) {
       console.error("Upload & Translate failed:", err);
       setError(err.message || "不明なエラー");
@@ -109,7 +96,8 @@ export default function App() {
         onChange={(e) => setFile(e.target.files?.[0] || null)}
       />
 
-      <br /><br />
+      <br />
+      <br />
 
       <button onClick={uploadAndTranslate} disabled={!file || uploading}>
         {uploading ? "処理中..." : "アップロード & 翻訳"}
