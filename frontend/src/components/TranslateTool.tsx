@@ -1,57 +1,62 @@
-import { useState } from "react";
+import React, { useState } from "react";
 
-const UPLOAD_API = import.meta.env.VITE_UPLOAD_API;
-const TRANSLATE_API = import.meta.env.VITE_TRANSLATE_API;
+const PRESIGNED_UPLOAD_API =
+  "https://owoutxnj2m.execute-api.ap-northeast-1.amazonaws.com/translate-tool-presigned-url";
 
-export default function App() {
+const TRANSLATE_API =
+  "https://owoutxnj2m.execute-api.ap-northeast-1.amazonaws.com/translate";
+
+const PRESIGNED_DOWNLOAD_API =
+  "https://owoutxnj2m.execute-api.ap-northeast-1.amazonaws.com/download-presigned-url";
+
+const App: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string>("");
+  const [loading, setLoading] = useState<boolean>(false);
+  const [translatedText, setTranslatedText] = useState<string>("");
+  const [translatedKey, setTranslatedKey] = useState<string | null>(null);
 
-  const uploadAndTranslate = async () => {
-    if (!file) return;
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    setFile(e.target.files[0]);
+  };
 
-    setUploading(true);
-    setError(null);
-    setResult(null);
+  const handleUploadAndTranslate = async () => {
+    if (!file) {
+      alert("ファイルを選択してください");
+      return;
+    }
 
     try {
-      /* ==============================
-         1. Presigned URL を取得
-      ============================== */
-      console.log("Calling presigned API:", UPLOAD_API);
+      setLoading(true);
+      setStatus("Presigned URL を取得中...");
 
-      const presignRes = await fetch(`${UPLOAD_API}?mode=upload`, {
+      // ① Presigned Upload URL 取得
+      const presignedRes = await fetch(PRESIGNED_UPLOAD_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           fileName: file.name,
-          contentType: file.type || "application/octet-stream",
+          contentType: file.type,
         }),
       });
 
-      const raw = await presignRes.json();
-
-      // HTTP API / REST API 両対応
-      const data = typeof raw.body === "string" ? JSON.parse(raw.body) : raw;
-
-      const { uploadUrl, objectKey } = data;
-
-      console.log("uploadUrl:", uploadUrl);
-      console.log("objectKey:", objectKey);
-
-      if (!uploadUrl || !objectKey) {
-        throw new Error("Presigned API returned invalid response");
+      if (!presignedRes.ok) {
+        throw new Error("Presigned API Error");
       }
 
-      /* ==============================
-         2. S3 に直接アップロード
-      ============================== */
-      const uploadRes = await fetch(uploadUrl, {
+      const presignedData: {
+        uploadUrl: string;
+        objectKey: string;
+      } = await presignedRes.json();
+
+      // ② S3 アップロード
+      setStatus("S3 にアップロード中...");
+
+      const uploadRes = await fetch(presignedData.uploadUrl, {
         method: "PUT",
         headers: {
-          "Content-Type": file.type || "application/octet-stream",
+          "Content-Type": file.type,
         },
         body: file,
       });
@@ -60,71 +65,99 @@ export default function App() {
         throw new Error("S3 upload failed");
       }
 
-      console.log("S3 upload success");
+      // ③ 翻訳 API 呼び出し
+      setStatus("翻訳処理中...");
 
-      /* ==============================
-         3. 翻訳 Lambda を呼ぶ
-      ============================== */
-      console.log("Calling translate API:", TRANSLATE_API);
-
-      const translateRes = await fetch(`${TRANSLATE_API}?mode=translate`, {
+      const translateRes = await fetch(TRANSLATE_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          objectKey: objectKey, // ← これが重要
+          objectKey: presignedData.objectKey,
         }),
       });
 
-      const translateRaw = await translateRes.json();
-      const translateData =
-        typeof translateRaw.body === "string"
-          ? JSON.parse(translateRaw.body)
-          : translateRaw;
-
       if (!translateRes.ok) {
-        throw new Error(
-          `Translate API Error: ${translateRes.status} ${JSON.stringify(translateData)}`
-        );
+        const text = await translateRes.text();
+        throw new Error(`Translate API Error: ${text}`);
       }
 
-      setResult(translateData.translatedText || "翻訳完了");
-    } catch (err: any) {
-      console.error("Upload & Translate failed:", err);
-      setError(err.message || "不明なエラー");
+      const translateData: {
+        translatedText: string;
+        translatedKey: string;
+      } = await translateRes.json();
+
+      setTranslatedText(translateData.translatedText);
+      setTranslatedKey(translateData.translatedKey);
+
+      setStatus("翻訳完了 🎉");
+    } catch (err) {
+      console.error(err);
+      setStatus("エラーが発生しました");
+      alert((err as Error).message);
     } finally {
-      setUploading(false);
+      setLoading(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!translatedKey) return;
+
+    try {
+      setStatus("ダウンロード URL 取得中...");
+
+      const res = await fetch(
+        `${PRESIGNED_DOWNLOAD_API}?objectKey=${encodeURIComponent(
+          translatedKey
+        )}`
+      );
+
+      if (!res.ok) {
+        throw new Error("Download Presigned API Error");
+      }
+
+      const data: { downloadUrl: string } = await res.json();
+
+      // ブラウザダウンロード
+      window.location.href = data.downloadUrl;
+    } catch (err) {
+      console.error(err);
+      alert("ダウンロードに失敗しました");
     }
   };
 
   return (
-    <div style={{ padding: "2rem", maxWidth: "600px", margin: "auto" }}>
-      <h1>PDF / 画像 翻訳ツール</h1>
+    <div style={{ padding: "24px", maxWidth: "700px", margin: "0 auto" }}>
+      <h2>PDF 翻訳ツール</h2>
 
-      <input
-        type="file"
-        accept=".pdf,image/*"
-        onChange={(e) => setFile(e.target.files?.[0] || null)}
-      />
+      <input type="file" accept="application/pdf" onChange={handleFileChange} />
 
-      <br />
-      <br />
+      <div style={{ marginTop: "16px" }}>
+        <button onClick={handleUploadAndTranslate} disabled={loading}>
+          翻訳開始
+        </button>
+      </div>
 
-      <button onClick={uploadAndTranslate} disabled={!file || uploading}>
-        {uploading ? "処理中..." : "アップロード & 翻訳"}
-      </button>
+      <p style={{ marginTop: "16px" }}>{status}</p>
 
-      {error && (
-        <p style={{ color: "red", marginTop: "1rem" }}>
-          ❌ {error}
-        </p>
+      {translatedText && (
+        <>
+          <h3>翻訳結果（テキスト）</h3>
+          <textarea
+            value={translatedText}
+            readOnly
+            rows={12}
+            style={{ width: "100%" }}
+          />
+        </>
       )}
 
-      {result && (
-        <div style={{ marginTop: "1rem", whiteSpace: "pre-wrap" }}>
-          <h3>翻訳結果</h3>
-          <pre>{result}</pre>
+      {translatedKey && (
+        <div style={{ marginTop: "16px" }}>
+          <button onClick={handleDownload}>翻訳結果をダウンロード</button>
         </div>
       )}
     </div>
   );
-}
+};
+
+export default App;
