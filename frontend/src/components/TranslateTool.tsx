@@ -1,13 +1,13 @@
 import React, { useState } from "react";
 
 const PRESIGNED_UPLOAD_API =
-  "https://owoutxnj2m.execute-api.ap-northeast-1.amazonaws.com/translate-tool-presigned-url";
+  "https://h0qu9crkzb.execute-api.ap-southeast-1.amazonaws.com/translate-tool-presigned-url";
 
 const TRANSLATE_API =
-  "https://owoutxnj2m.execute-api.ap-northeast-1.amazonaws.com/translate";
+  "https://h0qu9crkzb.execute-api.ap-southeast-1.amazonaws.com/translate";
 
 const PRESIGNED_DOWNLOAD_API =
-  "https://owoutxnj2m.execute-api.ap-northeast-1.amazonaws.com/download-presigned-url";
+  "https://h0qu9crkzb.execute-api.ap-southeast-1.amazonaws.com/download-presigned-url";
 
 const App: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
